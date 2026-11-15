@@ -1,0 +1,6 @@
+{
+  "name": "Clarity Ledger — Personal Finance & Budget Suite",
+  "description": "Minimalist personal finance, budget planner, debt payoff simulator, bill splitter, and savings tracker with real-time Google Sheets Web App synchronization.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
