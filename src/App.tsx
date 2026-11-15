@@ -7,13 +7,13 @@ import React, { useEffect, useState } from 'react';
 import {
   Calendar,
   CreditCard,
+  HardDrive,
   LayoutDashboard,
   Menu,
   Moon,
   PieChart,
   Plus,
   Receipt,
-  RefreshCw,
   Settings,
   Sun,
   Target,
@@ -33,7 +33,6 @@ import { MonthlyCalendarPage } from './pages/MonthlyCalendarPage';
 import { SavingGoalsPage } from './pages/SavingGoalsPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { SplitBillsPage } from './pages/SplitBillsPage';
-import { isValidGoogleScriptUrl } from './services/googleSheetsSync';
 import { PageId } from './types/finance';
 import {
   getFormattedTodayDateText,
@@ -72,16 +71,10 @@ const AppWorkspace: React.FC = () => {
     openTxModal,
     toggleTheme,
     isOnline,
-    syncStatus,
-    syncPending,
-    pendingChangesCount,
-    flushOfflineQueue,
-    triggerManualPull,
   } = useFinance();
 
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const { language, theme, googleScriptUrl, userName } = data.settings;
-  const hasSheetsUrl = isValidGoogleScriptUrl(googleScriptUrl);
+  const { language, theme, userName } = data.settings;
 
   useEffect(() => {
     if (!sidebarOpen) return;
@@ -186,49 +179,23 @@ const AppWorkspace: React.FC = () => {
           })}
         </nav>
 
-        {/* Bottom Workspace Controls: PWA Install + Sheets Sync + Theme Switch + User */}
+        {/* Bottom Workspace Controls: PWA Install + Demo Status + Theme Switch + User */}
         <div className="p-4 border-t border-neutral-200 dark:border-neutral-800 space-y-3">
           <PWAInstallButton />
 
           <div className="flex items-center justify-between text-xs">
-            <button
-              onClick={() => {
-                if (!hasSheetsUrl) {
-                  setActivePage('settings');
-                } else if (syncPending && isOnline) {
-                  void flushOfflineQueue();
-                } else {
-                  void triggerManualPull();
-                }
-              }}
-              className="inline-flex items-center gap-1.5 text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-neutral-100 transition-colors"
-              title={t('syncTooltip', language)}
-            >
+            <div className="inline-flex items-center gap-1.5 text-neutral-600 dark:text-neutral-400">
               {!isOnline ? (
                 <WifiOff className="w-3.5 h-3.5 text-amber-500" />
               ) : (
-                <RefreshCw
-                  className={`w-3.5 h-3.5 ${
-                    syncStatus === 'syncing' ? 'animate-spin' : ''
-                  }`}
-                />
+                <HardDrive className="w-3.5 h-3.5 text-neutral-500" />
               )}
               <span>
-                {!hasSheetsUrl
-                  ? t('connectSheets', language)
-                  : !isOnline
-                  ? pendingChangesCount > 0
-                    ? t('offlineQueued', language, { count: pendingChangesCount })
-                    : t('offlineCached', language)
-                  : syncStatus === 'syncing'
-                  ? t('syncingLabel', language)
-                  : syncPending && pendingChangesCount > 0
-                  ? t('syncQueueCount', language, { count: pendingChangesCount })
-                  : syncStatus === 'synced'
-                  ? t('sheetsSynced', language)
-                  : t('syncNow', language)}
+                {!isOnline
+                  ? t('offlineCached', language)
+                  : 'Demo · Local Storage'}
               </span>
-            </button>
+            </div>
 
             <button
               onClick={toggleTheme}

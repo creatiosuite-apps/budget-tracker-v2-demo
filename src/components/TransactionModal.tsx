@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { X } from 'lucide-react';
+import { Lock, X } from 'lucide-react';
 import { useFinance } from '../context/FinanceContext';
+import { DEMO_LIMITS } from '../utils/demoLimits';
 import { t } from '../utils/i18n';
 
 function getTodayDateString(): string {
@@ -67,10 +68,15 @@ export const TransactionModal: React.FC = () => {
     }
   }, [type, isTxModalOpen, filteredCategories, category]);
 
+  const txLimitReached =
+    !editingTransaction &&
+    data.transactions.length >= DEMO_LIMITS.MAX_TRANSACTIONS;
+
   if (!isTxModalOpen) return null;
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    if (txLimitReached) return;
     const numericAmount = parseFloat(amount);
     if (!description.trim() || isNaN(numericAmount) || numericAmount <= 0) {
       return;
@@ -106,11 +112,24 @@ export const TransactionModal: React.FC = () => {
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-xs p-4">
       <div className="w-full max-w-md rounded-xl bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 p-6 shadow-xl">
         <div className="flex items-center justify-between pb-4 border-b border-neutral-200 dark:border-neutral-800">
-          <h2 className="text-base font-semibold text-neutral-900 dark:text-neutral-100">
-            {editingTransaction
-              ? t('editTransaction', language)
-              : t('recordTransaction', language)}
-          </h2>
+          <div className="flex items-center gap-2.5">
+            <h2 className="text-base font-semibold text-neutral-900 dark:text-neutral-100">
+              {editingTransaction
+                ? t('editTransaction', language)
+                : t('recordTransaction', language)}
+            </h2>
+            {!editingTransaction && (
+              <span
+                className={`px-2 py-0.5 text-[11px] font-medium tabular-nums rounded-md border ${
+                  txLimitReached
+                    ? 'border-amber-200 dark:border-amber-800/70 bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300'
+                    : 'border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-300'
+                }`}
+              >
+                {data.transactions.length} / {DEMO_LIMITS.MAX_TRANSACTIONS}
+              </span>
+            )}
+          </div>
           <button
             onClick={closeTxModal}
             className="p-1.5 rounded-lg text-neutral-500 hover:text-neutral-900 dark:hover:text-neutral-100 hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors"
@@ -119,6 +138,17 @@ export const TransactionModal: React.FC = () => {
             <X className="w-4 h-4" />
           </button>
         </div>
+
+        {txLimitReached && (
+          <div className="mt-4 flex items-start gap-2.5 rounded-lg border border-amber-200 dark:border-amber-800/70 bg-amber-50/80 dark:bg-amber-950/30 p-3 text-xs text-amber-800 dark:text-amber-200">
+            <Lock className="w-4 h-4 shrink-0 mt-0.5 text-amber-600 dark:text-amber-400" />
+            <span>
+              Demo limit reached ({DEMO_LIMITS.MAX_TRANSACTIONS} /{' '}
+              {DEMO_LIMITS.MAX_TRANSACTIONS} transactions). Delete an existing
+              transaction to record a new one.
+            </span>
+          </div>
+        )}
 
         <form onSubmit={handleSubmit} className="mt-4 space-y-4">
           {/* Type Switcher */}
@@ -247,7 +277,8 @@ export const TransactionModal: React.FC = () => {
             </button>
             <button
               type="submit"
-              className="px-4 py-2 text-xs font-medium rounded-lg bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900 hover:bg-neutral-800 dark:hover:bg-neutral-200 transition-colors"
+              disabled={txLimitReached}
+              className="px-4 py-2 text-xs font-medium rounded-lg bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900 hover:bg-neutral-800 dark:hover:bg-neutral-200 disabled:opacity-45 disabled:cursor-not-allowed transition-colors"
             >
               {editingTransaction
                 ? t('updateTransaction', language)

@@ -1,9 +1,10 @@
 import React, { useMemo, useState } from 'react';
 import { motion } from 'motion/react';
-import { CheckCircle2, Edit3, Plus, RotateCcw, Trash2, X } from 'lucide-react';
+import { CheckCircle2, Edit3, Lock, Plus, RotateCcw, Trash2, X } from 'lucide-react';
 import { DebtPayoffTrajectoryChart } from '../components/Charts';
 import { useFinance } from '../context/FinanceContext';
 import { DebtAccount, Transaction } from '../types/finance';
+import { DEMO_LIMITS } from '../utils/demoLimits';
 import { formatCurrency, simulateDebtPayoff, t } from '../utils/formatters';
 
 export const DebtPayoffPage: React.FC = () => {
@@ -264,8 +265,13 @@ export const DebtPayoffPage: React.FC = () => {
     setAdjustingPayment(null);
   };
 
+  const debtLimitReached = data.debts.length >= DEMO_LIMITS.MAX_DEBTS;
+  const txLimitReached =
+    data.transactions.length >= DEMO_LIMITS.MAX_TRANSACTIONS;
+
   const handleAddDebt = (e: React.FormEvent) => {
     e.preventDefault();
+    if (debtLimitReached) return;
     const balNum = parseFloat(balance);
     const origNum = parseFloat(originalBalance) || balNum;
     const aprNum = parseFloat(apr);
@@ -319,6 +325,9 @@ export const DebtPayoffPage: React.FC = () => {
         >
           <Plus className="w-3.5 h-3.5" />
           <span>{t('addDebtAccount', language)}</span>
+          <span className="ml-1 opacity-75 tabular-nums">
+            ({data.debts.length}/{DEMO_LIMITS.MAX_DEBTS})
+          </span>
         </button>
       </div>
 
@@ -328,9 +337,31 @@ export const DebtPayoffPage: React.FC = () => {
           onSubmit={handleAddDebt}
           className="rounded-xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-5 space-y-4"
         >
-          <div className="text-sm font-semibold text-neutral-900 dark:text-neutral-100">
-            {t('addLoanCardTitle', language)}
+          <div className="flex items-center justify-between gap-2">
+            <div className="text-sm font-semibold text-neutral-900 dark:text-neutral-100">
+              {t('addLoanCardTitle', language)}
+            </div>
+            <span
+              className={`px-2 py-0.5 text-[11px] font-medium tabular-nums rounded-md border ${
+                debtLimitReached
+                  ? 'border-amber-200 dark:border-amber-800/70 bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300'
+                  : 'border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-300'
+              }`}
+            >
+              {data.debts.length} / {DEMO_LIMITS.MAX_DEBTS}
+            </span>
           </div>
+
+          {debtLimitReached && (
+            <div className="flex items-start gap-2 rounded-lg border border-amber-200 dark:border-amber-800/70 bg-amber-50/80 dark:bg-amber-950/30 p-3 text-xs text-amber-800 dark:text-amber-200">
+              <Lock className="w-3.5 h-3.5 shrink-0 mt-0.5 text-amber-600 dark:text-amber-400" />
+              <span>
+                Demo limit reached ({DEMO_LIMITS.MAX_DEBTS} /{' '}
+                {DEMO_LIMITS.MAX_DEBTS} debt accounts). Delete an existing debt
+                account to add a new one.
+              </span>
+            </div>
+          )}
           <div className="grid grid-cols-1 sm:grid-cols-3 lg:grid-cols-6 gap-3">
             <div className="sm:col-span-2">
               <label className="block text-xs text-neutral-500 mb-1">
@@ -459,7 +490,8 @@ export const DebtPayoffPage: React.FC = () => {
               </button>
               <button
                 type="submit"
-                className="px-4 py-1.5 text-xs font-medium rounded-lg bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900"
+                disabled={debtLimitReached}
+                className="px-4 py-1.5 text-xs font-medium rounded-lg bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900 disabled:opacity-45 disabled:cursor-not-allowed"
               >
                 {t('saveDebtAccount', language)}
               </button>
@@ -974,6 +1006,7 @@ export const DebtPayoffPage: React.FC = () => {
                       )}
                       <button
                         type="button"
+                        disabled={txLimitReached}
                         onClick={() =>
                           recordDebtPayment(
                             debt.id,
@@ -982,7 +1015,9 @@ export const DebtPayoffPage: React.FC = () => {
                           )
                         }
                         title={
-                          appliedExtra > 0
+                          txLimitReached
+                            ? `Demo limit of ${DEMO_LIMITS.MAX_TRANSACTIONS} transactions reached`
+                            : appliedExtra > 0
                             ? t('recordPaymentExtraTooltip', language, {
                                 amount: formatCurrency(scheduledPayment, currency),
                               })
@@ -990,7 +1025,7 @@ export const DebtPayoffPage: React.FC = () => {
                                 amount: formatCurrency(scheduledPayment, currency),
                               })
                         }
-                        className="p-1 text-neutral-400 hover:text-emerald-600 transition-colors"
+                        className="p-1 text-neutral-400 hover:text-emerald-600 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                       >
                         <CheckCircle2 className="w-4 h-4" />
                       </button>

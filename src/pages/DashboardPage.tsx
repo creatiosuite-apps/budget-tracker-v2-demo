@@ -14,6 +14,7 @@ import {
   MiniGradientSparkline,
 } from '../components/Charts';
 import { useFinance } from '../context/FinanceContext';
+import { DEMO_LIMITS } from '../utils/demoLimits';
 import {
   formatCurrency,
   getCategoryLimitForMonth,
@@ -86,6 +87,8 @@ export const DashboardPage: React.FC = () => {
   } = useFinance();
 
   const { currency, language } = data.settings;
+  const txLimitReached =
+    data.transactions.length >= DEMO_LIMITS.MAX_TRANSACTIONS;
   const [kpiTimeframe, setKpiTimeframe] = useState<KpiTimeframe>('1M');
   const [cashflowPeriod, setCashflowPeriod] = useState<CashflowPeriod>('5d');
   const [txSearch, setTxSearch] = useState('');
@@ -952,8 +955,9 @@ export const DashboardPage: React.FC = () => {
               <h2 className="text-base font-semibold text-neutral-900 dark:text-neutral-100">
                 {t('recentTransactions', language)}
               </h2>
-              <p className="text-xs text-neutral-500 dark:text-neutral-400 mt-0.5">
-                {t('realtimeSheetsSub', language)}
+              <p className="text-xs text-neutral-500 dark:text-neutral-400 mt-0.5 tabular-nums">
+                Demo ledger · {data.transactions.length} /{' '}
+                {DEMO_LIMITS.MAX_TRANSACTIONS} transactions recorded locally
               </p>
             </div>
 
@@ -1153,8 +1157,13 @@ export const DashboardPage: React.FC = () => {
                     </span>
                     <button
                       onClick={() => markBillPaid(bill.id)}
-                      title={t('markBillPaidTooltip', language)}
-                      className="p-1 rounded-md text-neutral-400 hover:text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-950/50 transition-colors"
+                      disabled={txLimitReached}
+                      title={
+                        txLimitReached
+                          ? `Demo limit of ${DEMO_LIMITS.MAX_TRANSACTIONS} transactions reached`
+                          : t('markBillPaidTooltip', language)
+                      }
+                      className="p-1 rounded-md text-neutral-400 hover:text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-950/50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                     >
                       <CheckCircle2 className="w-4 h-4" />
                     </button>

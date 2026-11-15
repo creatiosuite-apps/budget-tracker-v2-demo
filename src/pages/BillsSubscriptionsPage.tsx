@@ -4,6 +4,7 @@ import {
   CheckCircle2,
   Edit3,
   ExternalLink,
+  Lock,
   PauseCircle,
   PlayCircle,
   Plus,
@@ -14,6 +15,7 @@ import {
 } from 'lucide-react';
 import { useFinance } from '../context/FinanceContext';
 import { BillSubscription, Transaction } from '../types/finance';
+import { DEMO_LIMITS } from '../utils/demoLimits';
 import { formatCurrency, t } from '../utils/formatters';
 
 function shiftDueByCycle(
@@ -218,8 +220,12 @@ export const BillsSubscriptionsPage: React.FC = () => {
     return map;
   }, [data.bills]);
 
+  const billLimitReached = data.bills.length >= DEMO_LIMITS.MAX_BILLS;
+  const txLimitReached = data.transactions.length >= DEMO_LIMITS.MAX_TRANSACTIONS;
+
   const handleAddBill = (e: React.FormEvent) => {
     e.preventDefault();
+    if (billLimitReached) return;
     const numAmt = parseFloat(amount);
     if (!name.trim() || isNaN(numAmt) || numAmt <= 0) return;
 
@@ -397,6 +403,9 @@ export const BillsSubscriptionsPage: React.FC = () => {
         >
           <Plus className="w-3.5 h-3.5" />
           <span>{t('addRecurringBill', language)}</span>
+          <span className="ml-1 opacity-75 tabular-nums">
+            ({data.bills.length}/{DEMO_LIMITS.MAX_BILLS})
+          </span>
         </button>
       </div>
 
@@ -406,9 +415,31 @@ export const BillsSubscriptionsPage: React.FC = () => {
           onSubmit={handleAddBill}
           className="rounded-xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-5 space-y-4"
         >
-          <div className="text-sm font-semibold text-neutral-900 dark:text-neutral-100">
-            {t('addRecurringBillTitle', language)}
+          <div className="flex items-center justify-between gap-2">
+            <div className="text-sm font-semibold text-neutral-900 dark:text-neutral-100">
+              {t('addRecurringBillTitle', language)}
+            </div>
+            <span
+              className={`px-2 py-0.5 text-[11px] font-medium tabular-nums rounded-md border ${
+                billLimitReached
+                  ? 'border-amber-200 dark:border-amber-800/70 bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300'
+                  : 'border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-300'
+              }`}
+            >
+              {data.bills.length} / {DEMO_LIMITS.MAX_BILLS}
+            </span>
           </div>
+
+          {billLimitReached && (
+            <div className="flex items-start gap-2 rounded-lg border border-amber-200 dark:border-amber-800/70 bg-amber-50/80 dark:bg-amber-950/30 p-3 text-xs text-amber-800 dark:text-amber-200">
+              <Lock className="w-3.5 h-3.5 shrink-0 mt-0.5 text-amber-600 dark:text-amber-400" />
+              <span>
+                Demo limit reached ({DEMO_LIMITS.MAX_BILLS} /{' '}
+                {DEMO_LIMITS.MAX_BILLS} recurring bills). Delete an existing bill
+                to add a new one.
+              </span>
+            </div>
+          )}
           <div className="grid grid-cols-1 sm:grid-cols-3 lg:grid-cols-6 gap-3">
             <div className="sm:col-span-2">
               <label className="block text-xs text-neutral-500 mb-1">
@@ -539,7 +570,8 @@ export const BillsSubscriptionsPage: React.FC = () => {
               </button>
               <button
                 type="submit"
-                className="px-4 py-1.5 text-xs font-medium rounded-lg bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900"
+                disabled={billLimitReached}
+                className="px-4 py-1.5 text-xs font-medium rounded-lg bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900 disabled:opacity-45 disabled:cursor-not-allowed"
               >
                 {t('saveRecurringBill', language)}
               </button>
@@ -1158,8 +1190,13 @@ export const BillsSubscriptionsPage: React.FC = () => {
                           <>
                             <button
                               onClick={() => markBillPaid(bill.id)}
-                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md border border-neutral-200 dark:border-neutral-700 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 text-emerald-700 dark:text-emerald-400 transition-colors"
-                              title={t('payBillTooltip', language)}
+                              disabled={txLimitReached}
+                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md border border-neutral-200 dark:border-neutral-700 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 text-emerald-700 dark:text-emerald-400 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                              title={
+                                txLimitReached
+                                  ? `Demo limit of ${DEMO_LIMITS.MAX_TRANSACTIONS} transactions reached`
+                                  : t('payBillTooltip', language)
+                              }
                             >
                               <CheckCircle2 className="w-3.5 h-3.5" />
                               <span>{t('payBtn', language)}</span>

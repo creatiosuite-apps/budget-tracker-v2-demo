@@ -1,9 +1,14 @@
 import React, { useMemo, useState } from 'react';
 import { motion } from 'motion/react';
-import { Check, Edit3, Plus, RotateCcw, Trash2 } from 'lucide-react';
+import { Check, Edit3, Lock, Plus, RotateCcw, Trash2 } from 'lucide-react';
 import { MonthSelectionCard } from '../components/MonthSelectionCard';
 import { useFinance } from '../context/FinanceContext';
 import { BudgetCategory } from '../types/finance';
+import {
+  DEMO_LIMITS,
+  getCustomCategoryCount,
+  isCustomCategory,
+} from '../utils/demoLimits';
 import { formatCurrency, getCategoryLimitForMonth } from '../utils/formatters';
 import {
   formatMonthYearLabel,
@@ -38,6 +43,10 @@ export const MonthlyBudgetPage: React.FC = () => {
   >('Needs');
   const [newLimit, setNewLimit] = useState('');
   const [newColor, setNewColor] = useState('#2563EB');
+
+  const customCategoryCount = getCustomCategoryCount(data.categories);
+  const customCatLimitReached =
+    customCategoryCount >= DEMO_LIMITS.MAX_CUSTOM_CATEGORIES;
 
   // Transactions in the selected month
   const monthTransactions = useMemo(
@@ -153,6 +162,7 @@ export const MonthlyBudgetPage: React.FC = () => {
 
   const handleAddCategory = (e: React.FormEvent) => {
     e.preventDefault();
+    if (customCatLimitReached) return;
     const limitNum = parseFloat(newLimit);
     if (!newName.trim() || isNaN(limitNum) || limitNum <= 0) return;
 
@@ -188,6 +198,9 @@ export const MonthlyBudgetPage: React.FC = () => {
         >
           <Plus className="w-3.5 h-3.5" />
           <span>{t('newBudgetCategory', language)}</span>
+          <span className="ml-1 opacity-75 tabular-nums">
+            ({customCategoryCount}/{DEMO_LIMITS.MAX_CUSTOM_CATEGORIES})
+          </span>
         </button>
       </div>
 
@@ -200,9 +213,32 @@ export const MonthlyBudgetPage: React.FC = () => {
           onSubmit={handleAddCategory}
           className="rounded-xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-5 space-y-4"
         >
-          <div className="text-sm font-semibold text-neutral-900 dark:text-neutral-100">
-            {t('createBudgetCategory', language)}
+          <div className="flex items-center justify-between gap-2">
+            <div className="text-sm font-semibold text-neutral-900 dark:text-neutral-100">
+              {t('createBudgetCategory', language)}
+            </div>
+            <span
+              className={`px-2 py-0.5 text-[11px] font-medium tabular-nums rounded-md border ${
+                customCatLimitReached
+                  ? 'border-amber-200 dark:border-amber-800/70 bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300'
+                  : 'border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-300'
+              }`}
+            >
+              {customCategoryCount} / {DEMO_LIMITS.MAX_CUSTOM_CATEGORIES} custom
+            </span>
           </div>
+
+          {customCatLimitReached && (
+            <div className="flex items-start gap-2 rounded-lg border border-amber-200 dark:border-amber-800/70 bg-amber-50/80 dark:bg-amber-950/30 p-3 text-xs text-amber-800 dark:text-amber-200">
+              <Lock className="w-3.5 h-3.5 shrink-0 mt-0.5 text-amber-600 dark:text-amber-400" />
+              <span>
+                Demo limit reached ({DEMO_LIMITS.MAX_CUSTOM_CATEGORIES} /{' '}
+                {DEMO_LIMITS.MAX_CUSTOM_CATEGORIES} custom categories). Delete a
+                custom category to add a new one.
+              </span>
+            </div>
+          )}
+
           <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
             <div>
               <label className="block text-xs text-neutral-500 mb-1">
@@ -211,10 +247,11 @@ export const MonthlyBudgetPage: React.FC = () => {
               <input
                 type="text"
                 required
+                disabled={customCatLimitReached}
                 placeholder={t('categoryNamePlaceholder', language)}
                 value={newName}
                 onChange={(e) => setNewName(e.target.value)}
-                className="w-full px-3 py-2 text-xs rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-950 text-neutral-900 dark:text-neutral-100"
+                className="w-full px-3 py-2 text-xs rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-950 text-neutral-900 dark:text-neutral-100 disabled:opacity-50"
               />
             </div>
             <div>
@@ -223,12 +260,13 @@ export const MonthlyBudgetPage: React.FC = () => {
               </label>
               <select
                 value={newGroup}
+                disabled={customCatLimitReached}
                 onChange={(e) =>
                   setNewGroup(
                     e.target.value as 'Needs' | 'Wants' | 'Savings' | 'Income'
                   )
                 }
-                className="w-full px-3 py-2 text-xs rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-950 text-neutral-900 dark:text-neutral-100"
+                className="w-full px-3 py-2 text-xs rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-950 text-neutral-900 dark:text-neutral-100 disabled:opacity-50"
               >
                 <option value="Needs">{t('groupNeedsOpt', language)}</option>
                 <option value="Wants">{t('groupWantsOpt', language)}</option>
@@ -245,10 +283,11 @@ export const MonthlyBudgetPage: React.FC = () => {
                 step="1"
                 min="1"
                 required
+                disabled={customCatLimitReached}
                 placeholder="500"
                 value={newLimit}
                 onChange={(e) => setNewLimit(e.target.value)}
-                className="w-full px-3 py-2 text-xs tabular-nums rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-950 text-neutral-900 dark:text-neutral-100"
+                className="w-full px-3 py-2 text-xs tabular-nums rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-950 text-neutral-900 dark:text-neutral-100 disabled:opacity-50"
               />
             </div>
             <div>
@@ -267,8 +306,9 @@ export const MonthlyBudgetPage: React.FC = () => {
                   <button
                     key={c}
                     type="button"
+                    disabled={customCatLimitReached}
                     onClick={() => setNewColor(c)}
-                    className={`w-6 h-6 rounded-full transition-transform ${
+                    className={`w-6 h-6 rounded-full transition-transform disabled:opacity-50 ${
                       newColor === c
                         ? 'scale-110 ring-2 ring-offset-2 ring-neutral-900 dark:ring-white'
                         : ''
@@ -290,7 +330,8 @@ export const MonthlyBudgetPage: React.FC = () => {
             </button>
             <button
               type="submit"
-              className="px-4 py-1.5 text-xs font-medium rounded-lg bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900"
+              disabled={customCatLimitReached}
+              className="px-4 py-1.5 text-xs font-medium rounded-lg bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900 disabled:opacity-45 disabled:cursor-not-allowed"
             >
               {t('saveCategory', language)}
             </button>
@@ -541,6 +582,11 @@ export const MonthlyBudgetPage: React.FC = () => {
                         <span className="text-neutral-400 dark:text-neutral-500">
                           · {getLocalizedGroupLabel(cat.group, language)}
                         </span>
+                        {isCustomCategory(cat) && (
+                          <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-300">
+                            Custom
+                          </span>
+                        )}
                         {cat.hasMonthOverride && (
                           <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200/70 dark:border-emerald-800/60">
                             {t('customOverrideBadge', language)}

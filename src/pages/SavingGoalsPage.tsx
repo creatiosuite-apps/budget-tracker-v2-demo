@@ -1,8 +1,9 @@
 import React, { useMemo, useState } from 'react';
 import { motion } from 'motion/react';
-import { ArrowUpRight, Edit3, Plus, RotateCcw, Target, Trash2 } from 'lucide-react';
+import { ArrowUpRight, Edit3, Lock, Plus, RotateCcw, Target, Trash2 } from 'lucide-react';
 import { GoalGradientSparkline } from '../components/Charts';
 import { useFinance } from '../context/FinanceContext';
+import { DEMO_LIMITS } from '../utils/demoLimits';
 import { formatCurrency } from '../utils/formatters';
 import { t } from '../utils/i18n';
 
@@ -70,6 +71,11 @@ export const SavingGoalsPage: React.FC = () => {
     return { saved, target, monthlyCommitment, overallPct };
   }, [data.savingsGoals]);
 
+  const goalLimitReached =
+    data.savingsGoals.length >= DEMO_LIMITS.MAX_SAVINGS_GOALS;
+  const txLimitReached =
+    data.transactions.length >= DEMO_LIMITS.MAX_TRANSACTIONS;
+
   const handleContributionSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedGoal) return;
@@ -83,7 +89,7 @@ export const SavingGoalsPage: React.FC = () => {
       contribNote.trim() ||
         (contribType === 'deposit' ? 'Goal deposit' : 'Goal withdrawal'),
       contribDate,
-      alsoLogTx
+      !txLimitReached && alsoLogTx
     );
 
     setContribAmount('');
@@ -92,6 +98,7 @@ export const SavingGoalsPage: React.FC = () => {
 
   const handleCreateGoal = (e: React.FormEvent) => {
     e.preventDefault();
+    if (goalLimitReached) return;
     const tAmt = parseFloat(goalTarget);
     const initAmt = parseFloat(goalInitial) || 0;
     const mAmt = parseFloat(goalMonthly) || 200;
@@ -168,6 +175,9 @@ export const SavingGoalsPage: React.FC = () => {
         >
           <Plus className="w-3.5 h-3.5" />
           <span>{t('newSavingGoal', language)}</span>
+          <span className="ml-1 opacity-75 tabular-nums">
+            ({data.savingsGoals.length}/{DEMO_LIMITS.MAX_SAVINGS_GOALS})
+          </span>
         </button>
       </div>
 
@@ -177,9 +187,31 @@ export const SavingGoalsPage: React.FC = () => {
           onSubmit={handleCreateGoal}
           className="rounded-xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-5 space-y-4"
         >
-          <div className="text-sm font-semibold text-neutral-900 dark:text-neutral-100">
-            {t('createNewSavingGoal', language)}
+          <div className="flex items-center justify-between gap-2">
+            <div className="text-sm font-semibold text-neutral-900 dark:text-neutral-100">
+              {t('createNewSavingGoal', language)}
+            </div>
+            <span
+              className={`px-2 py-0.5 text-[11px] font-medium tabular-nums rounded-md border ${
+                goalLimitReached
+                  ? 'border-amber-200 dark:border-amber-800/70 bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300'
+                  : 'border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-300'
+              }`}
+            >
+              {data.savingsGoals.length} / {DEMO_LIMITS.MAX_SAVINGS_GOALS}
+            </span>
           </div>
+
+          {goalLimitReached && (
+            <div className="flex items-start gap-2 rounded-lg border border-amber-200 dark:border-amber-800/70 bg-amber-50/80 dark:bg-amber-950/30 p-3 text-xs text-amber-800 dark:text-amber-200">
+              <Lock className="w-3.5 h-3.5 shrink-0 mt-0.5 text-amber-600 dark:text-amber-400" />
+              <span>
+                Demo limit reached ({DEMO_LIMITS.MAX_SAVINGS_GOALS} /{' '}
+                {DEMO_LIMITS.MAX_SAVINGS_GOALS} savings goals). Delete an
+                existing goal to create a new one.
+              </span>
+            </div>
+          )}
           <div className="grid grid-cols-1 sm:grid-cols-3 lg:grid-cols-6 gap-3">
             <div className="sm:col-span-2">
               <label className="block text-xs text-neutral-500 mb-1">
@@ -277,7 +309,8 @@ export const SavingGoalsPage: React.FC = () => {
               </button>
               <button
                 type="submit"
-                className="px-4 py-1.5 text-xs font-medium rounded-lg bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900"
+                disabled={goalLimitReached}
+                className="px-4 py-1.5 text-xs font-medium rounded-lg bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900 disabled:opacity-45 disabled:cursor-not-allowed"
               >
                 {t('createGoalBtn', language)}
               </button>
@@ -683,18 +716,29 @@ export const SavingGoalsPage: React.FC = () => {
               onSubmit={handleContributionSubmit}
               className="p-4 rounded-xl border border-neutral-200 dark:border-neutral-800 bg-neutral-50/60 dark:bg-neutral-950/50 space-y-3"
             >
-              <div className="flex items-center justify-between">
+              <div className="flex flex-wrap items-center justify-between gap-2">
                 <span className="text-xs font-semibold text-neutral-900 dark:text-neutral-100">
                   {t('logContributionWithdrawal', language)}
                 </span>
-                <label className="inline-flex items-center gap-1.5 text-xs text-neutral-600 dark:text-neutral-400 cursor-pointer">
+                <label
+                  className={`inline-flex items-center gap-1.5 text-xs ${
+                    txLimitReached
+                      ? 'text-amber-600 dark:text-amber-400 cursor-not-allowed'
+                      : 'text-neutral-600 dark:text-neutral-400 cursor-pointer'
+                  }`}
+                >
                   <input
                     type="checkbox"
-                    checked={alsoLogTx}
+                    checked={!txLimitReached && alsoLogTx}
+                    disabled={txLimitReached}
                     onChange={(e) => setAlsoLogTx(e.target.checked)}
-                    className="rounded border-neutral-300"
+                    className="rounded border-neutral-300 disabled:opacity-50"
                   />
-                  <span>{t('alsoRecordInLedger', language)}</span>
+                  <span>
+                    {txLimitReached
+                      ? `Ledger limit reached (${DEMO_LIMITS.MAX_TRANSACTIONS}/${DEMO_LIMITS.MAX_TRANSACTIONS} tx)`
+                      : t('alsoRecordInLedger', language)}
+                  </span>
                 </label>
               </div>
 

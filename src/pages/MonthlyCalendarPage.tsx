@@ -8,6 +8,7 @@ import {
   Trash2,
 } from 'lucide-react';
 import { useFinance } from '../context/FinanceContext';
+import { DEMO_LIMITS } from '../utils/demoLimits';
 import { formatCompactCurrency, formatCurrency } from '../utils/formatters';
 import {
   getLocaleForLanguage,
@@ -35,6 +36,8 @@ export const MonthlyCalendarPage: React.FC = () => {
   } = useFinance();
 
   const { currency, language } = data.settings;
+  const txLimitReached =
+    data.transactions.length >= DEMO_LIMITS.MAX_TRANSACTIONS;
   const todayStr = getLocalTodayStr();
   const [selectedDayStr, setSelectedDayStr] = useState<string>(() =>
     todayStr.startsWith(selectedMonth) ? todayStr : `${selectedMonth}-01`
@@ -455,8 +458,13 @@ export const MonthlyCalendarPage: React.FC = () => {
                     </span>
                     <button
                       onClick={() => markBillPaid(bill.id, selectedDayStr)}
-                      title={t('markBillPaidDateTooltip', language)}
-                      className="p-1 text-emerald-600 hover:bg-emerald-100/60 rounded"
+                      disabled={txLimitReached}
+                      title={
+                        txLimitReached
+                          ? `Demo limit of ${DEMO_LIMITS.MAX_TRANSACTIONS} transactions reached`
+                          : t('markBillPaidDateTooltip', language)
+                      }
+                      className="p-1 text-emerald-600 hover:bg-emerald-100/60 rounded disabled:opacity-40 disabled:cursor-not-allowed"
                     >
                       <CheckCircle2 className="w-4 h-4" />
                     </button>

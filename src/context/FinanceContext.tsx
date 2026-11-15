@@ -10,13 +10,8 @@ import React, {
 import { t, TranslationKey } from '../utils/i18n';
 import { INITIAL_APP_DATA } from '../data/initialData';
 import { useOnlineStatus } from '../hooks/useOnlineStatus';
+import { DEMO_LIMITS, getCustomCategoryCount } from '../utils/demoLimits';
 import {
-  isValidGoogleScriptUrl,
-  pullFromGoogleSheets,
-  pushToGoogleSheets,
-} from '../services/googleSheetsSync';
-import {
-  computeSharedLedgerHash,
   loadOutboxFromIndexedDB,
   loadOutboxFromLocalStorage,
   loadStateFromIndexedDB,
@@ -160,26 +155,6 @@ const DEVICE_LOCAL_SETTING_KEYS = new Set<keyof UserSettings>([
   'syncIntervalSec',
 ]);
 
-function mergeRemoteState(prev: AppDataState, remote: AppDataState): AppDataState {
-  return {
-    ...prev,
-    transactions: remote.transactions ?? prev.transactions,
-    categories: remote.categories ?? prev.categories,
-    savingsGoals: remote.savingsGoals ?? prev.savingsGoals,
-    bills: remote.bills ?? prev.bills,
-    debts: remote.debts ?? prev.debts,
-    splitParticipants: remote.splitParticipants ?? prev.splitParticipants,
-    splitExpenses: remote.splitExpenses ?? prev.splitExpenses,
-    lastUpdated: remote.lastUpdated || prev.lastUpdated,
-    settings: {
-      ...prev.settings,
-      debtStrategy: remote.settings?.debtStrategy ?? prev.settings.debtStrategy,
-      extraDebtPayment:
-        remote.settings?.extraDebtPayment ?? prev.settings.extraDebtPayment,
-    },
-  };
-}
-
 const FinanceContext = createContext<FinanceContextType | undefined>(undefined);
 
 export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({
@@ -193,13 +168,22 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({
       if (saved) {
         const parsed = JSON.parse(saved);
         if (parsed && parsed.transactions && parsed.settings) {
-          const isUntouchedSeed =
-            parsed.lastUpdated === '2026-11-12T09:00:00.000Z' &&
-            !parsed.transactions.some((tx: { id: string }) => tx.id === 'tx-201');
-          if (isUntouchedSeed) {
+          const isOldSeed = parsed.lastUpdated === '2026-11-12T09:00:00.000Z';
+          if (isOldSeed) {
             return INITIAL_APP_DATA;
           }
-          return parsed;
+          return {
+            ...parsed,
+            settings: {
+              ...parsed.settings,
+              googleScriptUrl: DEMO_LIMITS.ALLOW_GOOGLE_SHEETS
+                ? parsed.settings.googleScriptUrl
+                : '',
+              autoSync: DEMO_LIMITS.ALLOW_GOOGLE_SHEETS
+                ? parsed.settings.autoSync
+                : false,
+            },
+          };
         }
       }
     } catch {
@@ -239,7 +223,10 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({
   const [syncMessageSpec, setSyncMessageSpec] = useState<SyncMessageSpec>(() =>
     typeof navigator !== 'undefined' && !navigator.onLine
       ? { kind: 'key', key: 'syncMsgOfflineActive' }
-      : { kind: 'key', key: 'syncMsgLocalLedgerActive' }
+      : {
+          kind: 'raw',
+          text: 'Demo mode active — all data is saved locally in your browser (Google Sheets sync disabled).',
+        }
   );
 
   const syncMessage = useMemo(() => {
@@ -247,12 +234,7 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({
     return t(syncMessageSpec.key, data.settings.language, syncMessageSpec.vars);
   }, [syncMessageSpec, data.settings.language]);
 
-  const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(() => {
-    const initialOutbox = loadOutboxFromLocalStorage();
-    return initialOutbox.lastSyncedAtIso
-      ? new Date(initialOutbox.lastSyncedAtIso).toLocaleTimeString()
-      : null;
-  });
+  const [lastSyncedAt] = useState<string | null>(null);
 
   const [isTxModalOpen, setIsTxModalOpen] = useState(false);
   const [txModalDefaultDate, setTxModalDefaultDate] = useState<
@@ -263,9 +245,6 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({
 
   const pushTimeoutRef = useRef<number | null>(null);
   const isApplyingRemoteRef = useRef<boolean>(false);
-  const hasDoneInitialPullRef = useRef<boolean>(false);
-  const pushInFlightRef = useRef<boolean>(false);
-  const pushQueuedRef = useRef<boolean>(false);
   const selectedMonthRef = useRef<string>(selectedMonth);
   selectedMonthRef.current = selectedMonth;
 
@@ -274,9 +253,6 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({
 
   const outboxRef = useRef<SyncOutboxMeta>(outbox);
   outboxRef.current = outbox;
-
-  const isOnlineRef = useRef<boolean>(isOnline);
-  isOnlineRef.current = isOnline;
 
   const updateOutbox = useCallback(
     (updater: (prev: SyncOutboxMeta) => SyncOutboxMeta) => {
@@ -315,6 +291,9 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({
 
       const current = latestDataRef.current;
       const hadSavedLocal = Boolean(localStorage.getItem(STATE_STORAGE_KEY));
+      const isOldSeed = idbState.lastUpdated === '2026-11-12T09:00:00.000Z';
+      if (isOldSeed) return;
+
       const isIdbNewer =
         !hadSavedLocal ||
         (idbState.lastUpdated &&
@@ -323,7 +302,18 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({
 
       if (isIdbNewer) {
         isApplyingRemoteRef.current = true;
-        setData(idbState);
+        setData({
+          ...idbState,
+          settings: {
+            ...idbState.settings,
+            googleScriptUrl: DEMO_LIMITS.ALLOW_GOOGLE_SHEETS
+              ? idbState.settings.googleScriptUrl
+              : '',
+            autoSync: DEMO_LIMITS.ALLOW_GOOGLE_SHEETS
+              ? idbState.settings.autoSync
+              : false,
+          },
+        });
         alignSelectedMonthIfEmpty(idbState.transactions);
         if (idbOutbox) {
           setOutbox(idbOutbox);
@@ -347,114 +337,12 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({
     }
   }, [data.settings.theme]);
 
-  // Core push executor with single-flight lock, hash deduplication, and follow-up flush
-  const executePush = useCallback(
-    async (force = false): Promise<boolean> => {
-      const currentState = latestDataRef.current;
-      const scriptUrl = currentState.settings.googleScriptUrl;
-      if (!isValidGoogleScriptUrl(scriptUrl)) {
-        if (force) {
-          setSyncStatus('error');
-          setSyncMessageSpec({ kind: 'key', key: 'syncMsgInvalidUrl' });
-        }
-        return false;
-      }
-
-      if (!isOnlineRef.current) {
-        setSyncStatus('offline');
-        setSyncMessageSpec(
-          outboxRef.current.pendingChangesCount > 0
-            ? {
-                kind: 'key',
-                key: 'syncMsgOfflineQueuedCount',
-                vars: { count: outboxRef.current.pendingChangesCount },
-              }
-            : { kind: 'key', key: 'syncMsgOfflineStored' }
-        );
-        return false;
-      }
-
-      const targetHash = computeSharedLedgerHash(currentState);
-      if (
-        !force &&
-        !outboxRef.current.syncPending &&
-        outboxRef.current.lastSyncedHash === targetHash
-      ) {
-        return true;
-      }
-
-      if (pushInFlightRef.current) {
-        pushQueuedRef.current = true;
-        return false;
-      }
-
-      pushInFlightRef.current = true;
-      setSyncStatus('syncing');
-      if (force) {
-        setSyncMessageSpec({ kind: 'key', key: 'syncMsgWriting' });
-      }
-
-      try {
-        const res = await pushToGoogleSheets(scriptUrl, currentState);
-        if (res.ok) {
-          const nowIso = new Date().toISOString();
-          const currentHashAfterPush = computeSharedLedgerHash(
-            latestDataRef.current
-          );
-          const hasNewEditsDuringPush = currentHashAfterPush !== targetHash;
-
-          updateOutbox((prev) => ({
-            syncPending: hasNewEditsDuringPush,
-            pendingChangesCount: hasNewEditsDuringPush
-              ? Math.max(1, prev.pendingChangesCount)
-              : 0,
-            lastLocalEditAt: prev.lastLocalEditAt,
-            lastSyncedHash: targetHash,
-            lastSyncedAtIso: nowIso,
-          }));
-
-          setLastSyncedAt(new Date(nowIso).toLocaleTimeString());
-
-          if (hasNewEditsDuringPush || pushQueuedRef.current) {
-            pushQueuedRef.current = false;
-            pushInFlightRef.current = false;
-            return await executePush(false);
-          }
-
-          setSyncStatus('synced');
-          setSyncMessageSpec(
-            res.message
-              ? { kind: 'raw', text: res.message }
-              : { kind: 'key', key: 'syncMsgSynced' }
-          );
-          return true;
-        } else {
-          if (!isOnlineRef.current) {
-            setSyncStatus('offline');
-            setSyncMessageSpec({ kind: 'key', key: 'syncMsgConnLost' });
-          } else {
-            setSyncStatus('error');
-            setSyncMessageSpec(
-              res.message
-                ? { kind: 'raw', text: res.message }
-                : { kind: 'key', key: 'syncMsgPaused' }
-            );
-          }
-          return false;
-        }
-      } finally {
-        pushInFlightRef.current = false;
-      }
-    },
-    [updateOutbox]
-  );
-
+  // Google Sheets sync is disabled in Demo mode
   const flushOfflineQueue = useCallback(async (): Promise<boolean> => {
-    return executePush(false);
-  }, [executePush]);
+    return false;
+  }, []);
 
-  // Persist every update immediately to localStorage + asynchronously to IndexedDB,
-  // and enqueue fast Google Sheets sync when shared ledger data changes.
+  // Persist every update immediately to localStorage + asynchronously to IndexedDB
   useEffect(() => {
     try {
       localStorage.setItem(STATE_STORAGE_KEY, JSON.stringify(data));
@@ -465,264 +353,38 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({
 
     if (isApplyingRemoteRef.current) {
       isApplyingRemoteRef.current = false;
-      return;
     }
+  }, [data]);
 
-    // Never push stale local state on mount; only schedule push for actual pending local mutations
-    if (!outboxRef.current.syncPending) {
-      return;
-    }
-
-    const nextHash = computeSharedLedgerHash(data);
-    const hasSharedLedgerChange = outboxRef.current.lastSyncedHash !== nextHash;
-    if (!hasSharedLedgerChange) {
-      return;
-    }
-
-    const scriptUrl = data.settings.googleScriptUrl;
-    const hasSheets = isValidGoogleScriptUrl(scriptUrl);
-
-    if (!isOnlineRef.current) {
-      if (hasSheets) {
-        setSyncStatus('offline');
-        setSyncMessageSpec({
-          kind: 'key',
-          key: 'syncMsgSavedOfflineQueued',
-          vars: { count: outboxRef.current.pendingChangesCount },
-        });
-      }
-      return;
-    }
-
-    if (data.settings.autoSync && hasSheets) {
-      if (pushTimeoutRef.current) {
-        window.clearTimeout(pushTimeoutRef.current);
-      }
-      setSyncStatus('syncing');
-      pushTimeoutRef.current = window.setTimeout(() => {
-        void executePush(false);
-      }, 550);
-    }
-  }, [data, executePush]);
-
-  // Flush queued offline edits automatically when connectivity or tab visibility returns
+  // Reflect online/offline status locally without contacting Google Sheets
   useEffect(() => {
-    const scriptUrl = data.settings.googleScriptUrl;
-    const hasSheets = isValidGoogleScriptUrl(scriptUrl);
-
     if (!isOnline) {
       if (pushTimeoutRef.current) {
         window.clearTimeout(pushTimeoutRef.current);
       }
-      if (hasSheets) {
-        setSyncStatus('offline');
-        setSyncMessageSpec(
-          outboxRef.current.pendingChangesCount > 0
-            ? {
-                kind: 'key',
-                key: 'syncMsgOfflineQueuedCount',
-                vars: { count: outboxRef.current.pendingChangesCount },
-              }
-            : { kind: 'key', key: 'syncMsgOfflineCached' }
-        );
-      }
+      setSyncStatus('offline');
+      setSyncMessageSpec({ kind: 'key', key: 'syncMsgOfflineStored' });
       return;
     }
 
-    if (hasSheets && data.settings.autoSync && outboxRef.current.syncPending) {
-      void executePush(false);
-    } else if (syncStatus === 'offline') {
-      setSyncStatus(outboxRef.current.lastSyncedAtIso ? 'synced' : 'idle');
-      setSyncMessageSpec({ kind: 'key', key: 'syncMsgBackOnline' });
+    if (syncStatus === 'offline') {
+      setSyncStatus('idle');
+      setSyncMessageSpec({
+        kind: 'raw',
+        text: 'Demo mode active — all data is saved locally in your browser (Google Sheets sync disabled).',
+      });
     }
-
-    const handleVisibilityChange = () => {
-      if (
-        document.visibilityState === 'visible' &&
-        isOnlineRef.current &&
-        isValidGoogleScriptUrl(latestDataRef.current.settings.googleScriptUrl) &&
-        latestDataRef.current.settings.autoSync &&
-        outboxRef.current.syncPending
-      ) {
-        void executePush(false);
-      }
-    };
-
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-    return () => {
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-    };
-  }, [isOnline, data.settings.googleScriptUrl, data.settings.autoSync, executePush, syncStatus]);
-
-  // Initial pull on app mount + background polling (never overwrites pending offline edits)
-  useEffect(() => {
-    const scriptUrl = data.settings.googleScriptUrl;
-    if (!data.settings.autoSync || !isValidGoogleScriptUrl(scriptUrl)) {
-      return;
-    }
-
-    const pullAndApply = async () => {
-      if (!isOnlineRef.current) return;
-
-      // Always flush pending local outbox before pulling remote changes
-      if (outboxRef.current.syncPending) {
-        const pushed = await executePush(false);
-        if (!pushed) return;
-      }
-
-      const res = await pullFromGoogleSheets(scriptUrl);
-      if (res.ok && res.data && res.data.lastUpdated) {
-        // Re-check outbox in case user edited while GET was in flight
-        if (outboxRef.current.syncPending) return;
-
-        const remoteData = res.data;
-        const prev = latestDataRef.current;
-        const remoteHash = computeSharedLedgerHash(remoteData);
-        const localHash = computeSharedLedgerHash(prev);
-        const hasTimestampAdvance = remoteData.lastUpdated > prev.lastUpdated;
-        const hasExternalSheetChange =
-          outboxRef.current.lastSyncedHash === null ||
-          remoteHash !== outboxRef.current.lastSyncedHash;
-
-        if (
-          remoteHash !== localHash &&
-          (hasTimestampAdvance || hasExternalSheetChange)
-        ) {
-          isApplyingRemoteRef.current = true;
-          const nowIso = new Date().toISOString();
-          updateOutbox((curr) => ({
-            ...curr,
-            syncPending: false,
-            pendingChangesCount: 0,
-            lastSyncedHash: remoteHash,
-            lastSyncedAtIso: nowIso,
-          }));
-          setLastSyncedAt(new Date(nowIso).toLocaleTimeString());
-          setSyncStatus('synced');
-          setSyncMessageSpec({ kind: 'key', key: 'syncMsgRealtimeUpdate' });
-          alignSelectedMonthIfEmpty(remoteData.transactions);
-          setData((current) => mergeRemoteState(current, remoteData));
-        }
-      }
-    };
-
-    if (!hasDoneInitialPullRef.current && isOnline) {
-      hasDoneInitialPullRef.current = true;
-      void pullAndApply();
-    }
-
-    const handleFocusPull = () => {
-      if (
-        document.visibilityState === 'visible' &&
-        isOnlineRef.current &&
-        !outboxRef.current.syncPending
-      ) {
-        void pullAndApply();
-      }
-    };
-    document.addEventListener('visibilitychange', handleFocusPull);
-
-    const intervalMs = Math.max(10, data.settings.syncIntervalSec || 15) * 1000;
-    const timer = window.setInterval(() => {
-      if (document.visibilityState === 'visible' && isOnlineRef.current) {
-        void pullAndApply();
-      }
-    }, intervalMs);
-
-    return () => {
-      window.clearInterval(timer);
-      document.removeEventListener('visibilitychange', handleFocusPull);
-    };
-  }, [
-    isOnline,
-    data.settings.googleScriptUrl,
-    data.settings.autoSync,
-    data.settings.syncIntervalSec,
-    alignSelectedMonthIfEmpty,
-    executePush,
-    updateOutbox,
-  ]);
+  }, [isOnline, syncStatus]);
 
   const triggerManualPush = useCallback(async (): Promise<boolean> => {
-    return executePush(true);
-  }, [executePush]);
+    return false;
+  }, []);
 
   const triggerManualPull = useCallback(
-    async (overrideUrl?: string): Promise<boolean> => {
-      const scriptUrl = (overrideUrl ?? data.settings.googleScriptUrl).trim();
-      if (!isValidGoogleScriptUrl(scriptUrl)) {
-        setSyncStatus('error');
-        setSyncMessageSpec({ kind: 'key', key: 'syncMsgInvalidUrl' });
-        return false;
-      }
-      if (!isOnlineRef.current) {
-        setSyncStatus('offline');
-        setSyncMessageSpec({ kind: 'key', key: 'syncMsgCannotPullOffline' });
-        return false;
-      }
-
-      if (pushTimeoutRef.current) {
-        window.clearTimeout(pushTimeoutRef.current);
-      }
-
-      setSyncStatus('syncing');
-      setSyncMessageSpec({ kind: 'key', key: 'syncMsgReading' });
-      const res = await pullFromGoogleSheets(scriptUrl);
-      if (res.ok) {
-        if (res.data) {
-          isApplyingRemoteRef.current = true;
-          const pulledHash = computeSharedLedgerHash(res.data);
-          const nowIso = new Date().toISOString();
-          alignSelectedMonthIfEmpty(res.data.transactions);
-          setData((prev) => mergeRemoteState(prev, res.data!));
-          updateOutbox((curr) => ({
-            ...curr,
-            syncPending: false,
-            pendingChangesCount: 0,
-            lastSyncedHash: pulledHash,
-            lastSyncedAtIso: nowIso,
-          }));
-          setSyncStatus('synced');
-          setLastSyncedAt(new Date(nowIso).toLocaleTimeString());
-          setSyncMessageSpec({ kind: 'key', key: 'syncMsgPulled' });
-        } else {
-          // Sheet is empty, push initial data automatically
-          const pushRes = await pushToGoogleSheets(scriptUrl, data);
-          if (pushRes.ok) {
-            const pushedHash = computeSharedLedgerHash(data);
-            const nowIso = new Date().toISOString();
-            updateOutbox((curr) => ({
-              ...curr,
-              syncPending: false,
-              pendingChangesCount: 0,
-              lastSyncedHash: pushedHash,
-              lastSyncedAtIso: nowIso,
-            }));
-            setSyncStatus('synced');
-            setLastSyncedAt(new Date(nowIso).toLocaleTimeString());
-            setSyncMessageSpec({ kind: 'key', key: 'syncMsgInitEmpty' });
-          } else {
-            setSyncStatus('error');
-            setSyncMessageSpec(
-              pushRes.message
-                ? { kind: 'raw', text: pushRes.message }
-                : { kind: 'key', key: 'syncMsgInitFailed' }
-            );
-            return false;
-          }
-        }
-        return true;
-      } else {
-        setSyncStatus('error');
-        setSyncMessageSpec(
-          res.message
-            ? { kind: 'raw', text: res.message }
-            : { kind: 'key', key: 'syncMsgFailedRead' }
-        );
-        return false;
-      }
+    async (_overrideUrl?: string): Promise<boolean> => {
+      return false;
     },
-    [data, alignSelectedMonthIfEmpty, executePush, updateOutbox]
+    []
   );
 
   const mutateState = useCallback(
@@ -793,16 +455,24 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({
       .slice(0, 10);
   };
 
-  // Transactions
+  // Transactions (capped at DEMO_LIMITS.MAX_TRANSACTIONS)
   const addTransaction = (tx: Omit<Transaction, 'id'>) => {
+    if (latestDataRef.current.transactions.length >= DEMO_LIMITS.MAX_TRANSACTIONS) {
+      return;
+    }
     const newTx: Transaction = {
       ...tx,
       id: `tx-${Date.now()}`,
     };
-    mutateState((prev) => ({
-      ...prev,
-      transactions: [newTx, ...prev.transactions],
-    }));
+    mutateState((prev) => {
+      if (prev.transactions.length >= DEMO_LIMITS.MAX_TRANSACTIONS) {
+        return prev;
+      }
+      return {
+        ...prev,
+        transactions: [newTx, ...prev.transactions],
+      };
+    });
   };
 
   const updateTransaction = (tx: Transaction) => {
@@ -922,16 +592,31 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({
     }));
   };
 
-  // Categories
+  // Categories (custom categories capped at DEMO_LIMITS.MAX_CUSTOM_CATEGORIES)
   const addCategory = (cat: Omit<BudgetCategory, 'id'>) => {
+    if (
+      getCustomCategoryCount(latestDataRef.current.categories) >=
+      DEMO_LIMITS.MAX_CUSTOM_CATEGORIES
+    ) {
+      return;
+    }
     const newCat: BudgetCategory = {
       ...cat,
-      id: `cat-${Date.now()}`,
+      id: `cat-custom-${Date.now()}`,
+      isCustom: true,
     };
-    mutateState((prev) => ({
-      ...prev,
-      categories: [...prev.categories, newCat],
-    }));
+    mutateState((prev) => {
+      if (
+        getCustomCategoryCount(prev.categories) >=
+        DEMO_LIMITS.MAX_CUSTOM_CATEGORIES
+      ) {
+        return prev;
+      }
+      return {
+        ...prev,
+        categories: [...prev.categories, newCat],
+      };
+    });
   };
 
   const updateCategory = (cat: BudgetCategory) => {
@@ -948,8 +633,14 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({
     }));
   };
 
-  // Savings Goals
+  // Savings Goals (capped at DEMO_LIMITS.MAX_SAVINGS_GOALS)
   const addSavingsGoal = (goal: Omit<SavingsGoal, 'id' | 'history'>) => {
+    if (
+      latestDataRef.current.savingsGoals.length >=
+      DEMO_LIMITS.MAX_SAVINGS_GOALS
+    ) {
+      return;
+    }
     const newGoal: SavingsGoal = {
       ...goal,
       id: `goal-${Date.now()}`,
@@ -967,10 +658,15 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({
             ]
           : [],
     };
-    mutateState((prev) => ({
-      ...prev,
-      savingsGoals: [...prev.savingsGoals, newGoal],
-    }));
+    mutateState((prev) => {
+      if (prev.savingsGoals.length >= DEMO_LIMITS.MAX_SAVINGS_GOALS) {
+        return prev;
+      }
+      return {
+        ...prev,
+        savingsGoals: [...prev.savingsGoals, newGoal],
+      };
+    });
   };
 
   const updateSavingsGoal = (goal: SavingsGoal) => {
@@ -1002,7 +698,10 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({
       const signed = type === 'deposit' ? Math.abs(amount) : -Math.abs(amount);
       const nextBalance = Math.max(0, targetGoal.currentAmount + signed);
       const now = Date.now();
-      const shouldLogTx = alsoLogTransaction && type === 'deposit';
+      const shouldLogTx =
+        alsoLogTransaction &&
+        type === 'deposit' &&
+        prev.transactions.length < DEMO_LIMITS.MAX_TRANSACTIONS;
       const linkedTxId = shouldLogTx ? `tx-${now}` : undefined;
 
       const newEntry = {
@@ -1105,16 +804,24 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({
     });
   };
 
-  // Bills & Subscriptions
+  // Bills & Subscriptions (capped at DEMO_LIMITS.MAX_BILLS)
   const addBill = (bill: Omit<BillSubscription, 'id'>) => {
+    if (latestDataRef.current.bills.length >= DEMO_LIMITS.MAX_BILLS) {
+      return;
+    }
     const newBill: BillSubscription = {
       ...bill,
       id: `bill-${Date.now()}`,
     };
-    mutateState((prev) => ({
-      ...prev,
-      bills: [...prev.bills, newBill],
-    }));
+    mutateState((prev) => {
+      if (prev.bills.length >= DEMO_LIMITS.MAX_BILLS) {
+        return prev;
+      }
+      return {
+        ...prev,
+        bills: [...prev.bills, newBill],
+      };
+    });
   };
 
   const updateBill = (bill: BillSubscription) => {
@@ -1137,8 +844,12 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({
     paidDate?: string,
     customAmount?: number
   ) => {
+    if (latestDataRef.current.transactions.length >= DEMO_LIMITS.MAX_TRANSACTIONS) {
+      return;
+    }
     const dateStr = paidDate || '2026-11-12';
     mutateState((prev) => {
+      if (prev.transactions.length >= DEMO_LIMITS.MAX_TRANSACTIONS) return prev;
       const target = prev.bills.find((b) => b.id === billId);
       if (!target) return prev;
 
@@ -1305,16 +1016,24 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({
     }));
   };
 
-  // Debts
+  // Debts (capped at DEMO_LIMITS.MAX_DEBTS)
   const addDebt = (debt: Omit<DebtAccount, 'id'>) => {
+    if (latestDataRef.current.debts.length >= DEMO_LIMITS.MAX_DEBTS) {
+      return;
+    }
     const newDebt: DebtAccount = {
       ...debt,
       id: `debt-${Date.now()}`,
     };
-    mutateState((prev) => ({
-      ...prev,
-      debts: [...prev.debts, newDebt],
-    }));
+    mutateState((prev) => {
+      if (prev.debts.length >= DEMO_LIMITS.MAX_DEBTS) {
+        return prev;
+      }
+      return {
+        ...prev,
+        debts: [...prev.debts, newDebt],
+      };
+    });
   };
 
   const updateDebt = (debt: DebtAccount) => {
@@ -1332,7 +1051,11 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({
   };
 
   const recordDebtPayment = (debtId: string, amount: number, date: string) => {
+    if (latestDataRef.current.transactions.length >= DEMO_LIMITS.MAX_TRANSACTIONS) {
+      return;
+    }
     mutateState((prev) => {
+      if (prev.transactions.length >= DEMO_LIMITS.MAX_TRANSACTIONS) return prev;
       const target = prev.debts.find((d) => d.id === debtId);
       if (!target) return prev;
       const newBalance = Math.max(0, target.balance - amount);
@@ -1551,11 +1274,18 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({
     }));
   };
 
-  // Settings
+  // Settings (Google Sheets URL & autoSync are locked off in Demo mode)
   const updateSettings = (partial: Partial<UserSettings>) => {
-    const changedKeys = Object.keys(partial) as (keyof UserSettings)[];
+    const sanitizedPartial: Partial<UserSettings> = { ...partial };
+    if (!DEMO_LIMITS.ALLOW_GOOGLE_SHEETS) {
+      delete sanitizedPartial.googleScriptUrl;
+      delete sanitizedPartial.autoSync;
+    }
+
+    const changedKeys = Object.keys(sanitizedPartial) as (keyof UserSettings)[];
+    if (changedKeys.length === 0) return;
+
     const isLocalOnly =
-      changedKeys.length > 0 &&
       changedKeys.every((key) => DEVICE_LOCAL_SETTING_KEYS.has(key));
 
     if (isLocalOnly) {
@@ -1564,7 +1294,7 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({
         ...prev,
         settings: {
           ...prev.settings,
-          ...partial,
+          ...sanitizedPartial,
         },
       }));
       return;
@@ -1574,7 +1304,7 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({
       ...prev,
       settings: {
         ...prev.settings,
-        ...partial,
+        ...sanitizedPartial,
       },
     }));
   };

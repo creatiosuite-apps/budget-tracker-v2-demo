@@ -34,6 +34,7 @@ export interface BudgetCategory {
   monthlyLimit: number;
   monthlyOverrides?: Record<string, number>; // YYYY-MM -> custom budget limit for that month
   color: string;
+  isCustom?: boolean;
 }
 
 export interface SavingsHistoryEntry {
