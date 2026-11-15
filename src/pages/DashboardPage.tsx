@@ -1,12 +1,14 @@
 import React, { useMemo, useState } from 'react';
 import { motion } from 'motion/react';
 import {
+  AlertTriangle,
   ArrowDownRight,
   ArrowUpRight,
   Calendar,
   CheckCircle2,
   Plus,
   Search,
+  ShieldCheck,
   Trash2,
 } from 'lucide-react';
 import {
@@ -22,6 +24,7 @@ import {
 } from '../utils/formatters';
 import {
   formatMonthYearLabel,
+  getLocaleForLanguage,
   getLocalizedGroupLabel,
   t,
 } from '../utils/i18n';
@@ -90,6 +93,9 @@ export const DashboardPage: React.FC = () => {
   const txLimitReached =
     data.transactions.length >= DEMO_LIMITS.MAX_TRANSACTIONS;
   const [kpiTimeframe, setKpiTimeframe] = useState<KpiTimeframe>('1M');
+  const [safeSpendMode, setSafeSpendMode] = useState<'budget' | 'income'>(
+    'budget'
+  );
   const [cashflowPeriod, setCashflowPeriod] = useState<CashflowPeriod>('5d');
   const [txSearch, setTxSearch] = useState('');
   const [txScope, setTxScope] = useState<'month' | 'all'>('month');
@@ -222,6 +228,140 @@ export const DashboardPage: React.FC = () => {
     data.savingsGoals,
     data.debts,
     selectedMonth,
+  ]);
+
+  // Safe to Spend Today computation (Budget Cap vs Income pool)
+  const safeToSpend = useMemo(() => {
+    const [yStr, mStr] = selectedMonth.split('-');
+    const year = parseInt(yStr, 10) || 2026;
+    const month = parseInt(mStr, 10) || 11;
+    const daysInMonth = new Date(year, month, 0).getDate();
+    const endOfMonthStr = `${selectedMonth}-${String(daysInMonth).padStart(2, '0')}`;
+
+    const now = new Date();
+    const todayYm = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    const todayStr = `${todayYm}-${String(now.getDate()).padStart(2, '0')}`;
+    const locale = getLocaleForLanguage(language);
+
+    let effectiveDateStr = todayStr;
+    let daysRemainingInclusive = daysInMonth;
+    let daysRemainingAfterToday = Math.max(0, daysInMonth - 1);
+    let subtitleText = '';
+    const isPastMonth = selectedMonth < todayYm;
+
+    if (selectedMonth === todayYm) {
+      const currentDay = Math.min(daysInMonth, now.getDate());
+      effectiveDateStr = todayStr;
+      daysRemainingInclusive = Math.max(1, daysInMonth - currentDay + 1);
+      daysRemainingAfterToday = Math.max(0, daysInMonth - currentDay);
+      const dateLabel = new Intl.DateTimeFormat(locale, {
+        weekday: 'long',
+        month: 'short',
+        day: 'numeric',
+      }).format(now);
+      subtitleText = `${dateLabel} · ${daysRemainingInclusive} ${
+        daysRemainingInclusive === 1 ? 'day' : 'days'
+      } left`;
+    } else if (selectedMonth > todayYm) {
+      effectiveDateStr = `${selectedMonth}-01`;
+      daysRemainingInclusive = daysInMonth;
+      daysRemainingAfterToday = Math.max(0, daysInMonth - 1);
+      subtitleText = `${formatMonthYearLabel(
+        selectedMonth,
+        language,
+        'long'
+      )} · ${daysRemainingInclusive} days left`;
+    } else {
+      effectiveDateStr = endOfMonthStr;
+      daysRemainingInclusive = 1;
+      daysRemainingAfterToday = 0;
+      subtitleText = `${formatMonthYearLabel(
+        selectedMonth,
+        language,
+        'long'
+      )} · Month ended`;
+    }
+
+    const basePool =
+      safeSpendMode === 'budget'
+        ? metrics.totalExpenseBudget
+        : metrics.totalIncome;
+
+    const upcomingBillsList = data.bills.filter(
+      (b) =>
+        b.status === 'active' &&
+        b.nextDueDate >= effectiveDateStr &&
+        b.nextDueDate <= endOfMonthStr
+    );
+    const upcomingBillsTotal = upcomingBillsList.reduce(
+      (sum, b) => sum + b.amount,
+      0
+    );
+    const upcomingBillsCount = upcomingBillsList.length;
+
+    const todayExpenses = monthTransactions.filter(
+      (tx) => tx.type === 'expense' && tx.date === effectiveDateStr
+    );
+    const spentToday = todayExpenses.reduce((sum, tx) => sum + tx.amount, 0);
+    const spentTodayCount = todayExpenses.length;
+
+    const spentOtherDays = monthTransactions
+      .filter((tx) => tx.type === 'expense' && tx.date !== effectiveDateStr)
+      .reduce((sum, tx) => sum + tx.amount, 0);
+
+    const availableAtStartOfToday =
+      basePool - spentOtherDays - upcomingBillsTotal;
+    const rawDailyTarget = availableAtStartOfToday / daysRemainingInclusive;
+    const dailyTarget = Math.max(0, rawDailyTarget);
+    const safeToSpendToday = rawDailyTarget - spentToday;
+    const monthRemaining = basePool - metrics.totalExpenses - upcomingBillsTotal;
+    const tomorrowsPace =
+      daysRemainingAfterToday > 0
+        ? monthRemaining / daysRemainingAfterToday
+        : 0;
+
+    let progressPct = 0;
+    if (dailyTarget > 0) {
+      progressPct = Math.min(100, Math.max(0, (spentToday / dailyTarget) * 100));
+    } else if (spentToday > 0 || safeToSpendToday < 0) {
+      progressPct = 100;
+    }
+
+    let status: 'onTrack' | 'warning' | 'over' | 'empty' = 'onTrack';
+    if (basePool <= 0 && spentToday === 0) {
+      status = 'empty';
+    } else if (safeToSpendToday < 0) {
+      status = 'over';
+    } else if (dailyTarget > 0 && spentToday / dailyTarget >= 0.8) {
+      status = 'warning';
+    }
+
+    return {
+      effectiveDateStr,
+      subtitleText,
+      isPastMonth,
+      daysRemainingAfterToday,
+      basePool,
+      upcomingBillsTotal,
+      upcomingBillsCount,
+      spentToday,
+      spentTodayCount,
+      dailyTarget,
+      safeToSpendToday,
+      monthRemaining,
+      tomorrowsPace,
+      progressPct,
+      status,
+    };
+  }, [
+    selectedMonth,
+    language,
+    safeSpendMode,
+    metrics.totalExpenseBudget,
+    metrics.totalIncome,
+    metrics.totalExpenses,
+    data.bills,
+    monthTransactions,
   ]);
 
   // 6-month Savings Rate trend for Secondary KPI Card 1 sparkline
@@ -735,6 +875,216 @@ export const DashboardPage: React.FC = () => {
                     })
                   : t('debtFree', language)}
               </span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Safe to Spend Today Card */}
+      <div className="rounded-xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-6">
+        {/* Card Header: Title + Subtitle | Pool Toggle + Log Today */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div>
+            <h2 className="text-base font-semibold text-neutral-900 dark:text-neutral-100">
+              Safe to Spend Today
+            </h2>
+            <p className="text-xs text-neutral-500 dark:text-neutral-400 mt-0.5 tabular-nums">
+              {safeToSpend.subtitleText}
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2.5">
+            <div
+              role="group"
+              aria-label="Safe to spend pool source"
+              className="inline-flex items-center gap-0.5 p-1 rounded-lg bg-neutral-100/90 dark:bg-neutral-800/80 border border-neutral-200/70 dark:border-neutral-700/60"
+            >
+              <button
+                type="button"
+                onClick={() => setSafeSpendMode('budget')}
+                className={`px-3 py-1 text-xs font-medium rounded-md transition-all whitespace-nowrap shrink-0 ${
+                  safeSpendMode === 'budget'
+                    ? 'bg-white dark:bg-neutral-900 text-neutral-900 dark:text-neutral-100 shadow-xs'
+                    : 'text-neutral-500 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-neutral-200'
+                }`}
+              >
+                Budget Cap
+              </button>
+              <button
+                type="button"
+                onClick={() => setSafeSpendMode('income')}
+                className={`px-3 py-1 text-xs font-medium rounded-md transition-all whitespace-nowrap shrink-0 ${
+                  safeSpendMode === 'income'
+                    ? 'bg-white dark:bg-neutral-900 text-neutral-900 dark:text-neutral-100 shadow-xs'
+                    : 'text-neutral-500 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-neutral-200'
+                }`}
+              >
+                Income
+              </button>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => openTxModal(safeToSpend.effectiveDateStr)}
+              title={
+                txLimitReached
+                  ? `Demo limit of ${DEMO_LIMITS.MAX_TRANSACTIONS} transactions reached`
+                  : undefined
+              }
+              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-medium rounded-lg border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-neutral-700 dark:text-neutral-200 hover:bg-neutral-50 dark:hover:bg-neutral-800 transition-colors whitespace-nowrap shrink-0"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>Log Today</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Body: Left Daily Allowance & Progress | Right 4-Metric Breakdown */}
+        <div className="mt-5 grid grid-cols-1 lg:grid-cols-12 gap-6 items-center">
+          {/* Left Section */}
+          <div className="lg:col-span-5">
+            <div className="flex flex-wrap items-baseline gap-3">
+              <div
+                className={`text-3xl sm:text-4xl font-semibold tracking-tight tabular-nums ${
+                  safeToSpend.status === 'over'
+                    ? 'text-rose-600 dark:text-rose-400'
+                    : safeToSpend.status === 'warning'
+                    ? 'text-amber-600 dark:text-amber-400'
+                    : safeToSpend.status === 'empty'
+                    ? 'text-neutral-500 dark:text-neutral-400'
+                    : 'text-emerald-600 dark:text-emerald-400'
+                }`}
+              >
+                {formatCurrency(safeToSpend.safeToSpendToday, currency)}
+              </div>
+
+              <span
+                className={`inline-flex items-center gap-1.5 text-xs font-medium ${
+                  safeToSpend.status === 'over'
+                    ? 'text-rose-600 dark:text-rose-400'
+                    : safeToSpend.status === 'warning'
+                    ? 'text-amber-600 dark:text-amber-400'
+                    : safeToSpend.status === 'empty'
+                    ? 'text-neutral-500 dark:text-neutral-400'
+                    : 'text-emerald-600 dark:text-emerald-400'
+                }`}
+              >
+                {safeToSpend.status === 'over' ||
+                safeToSpend.status === 'warning' ? (
+                  <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                ) : (
+                  <ShieldCheck className="w-3.5 h-3.5 shrink-0" />
+                )}
+                <span>
+                  {safeToSpend.status === 'over'
+                    ? 'Over daily target'
+                    : safeToSpend.status === 'warning'
+                    ? 'Nearing limit'
+                    : safeToSpend.status === 'empty'
+                    ? safeSpendMode === 'income'
+                      ? 'No income logged'
+                      : 'No budget set'
+                    : 'On track'}
+                </span>
+              </span>
+            </div>
+
+            <div className="mt-3.5 h-2 w-full rounded-full bg-neutral-100 dark:bg-neutral-800 overflow-hidden">
+              <div
+                className={`h-full rounded-full transition-all duration-300 ${
+                  safeToSpend.status === 'over'
+                    ? 'bg-rose-500'
+                    : safeToSpend.status === 'warning'
+                    ? 'bg-amber-500'
+                    : 'bg-emerald-600 dark:bg-emerald-500'
+                }`}
+                style={{ width: `${safeToSpend.progressPct}%` }}
+              />
+            </div>
+
+            <div className="mt-2 flex items-center justify-between gap-2 text-xs text-neutral-500 dark:text-neutral-400 tabular-nums">
+              <span>
+                Daily target:{' '}
+                {formatCurrency(safeToSpend.dailyTarget, currency)}
+              </span>
+              <span>
+                Spent today:{' '}
+                {formatCurrency(safeToSpend.spentToday, currency)}
+              </span>
+            </div>
+          </div>
+
+          {/* Right Section: 4-Column Stat Breakdown */}
+          <div className="lg:col-span-7 lg:border-l lg:border-neutral-200/80 lg:dark:border-neutral-800 lg:pl-6">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+              <div>
+                <div className="text-xs text-neutral-500 dark:text-neutral-400">
+                  Month Remaining
+                </div>
+                <div
+                  className={`mt-1 text-sm font-semibold tabular-nums ${
+                    safeToSpend.monthRemaining < 0
+                      ? 'text-rose-600 dark:text-rose-400'
+                      : 'text-neutral-900 dark:text-neutral-100'
+                  }`}
+                >
+                  {formatCurrency(safeToSpend.monthRemaining, currency)}
+                </div>
+                <div className="mt-0.5 text-[11px] text-neutral-400 dark:text-neutral-500">
+                  {safeSpendMode === 'budget' ? 'Budget Cap' : 'Income'}
+                </div>
+              </div>
+
+              <div>
+                <div className="text-xs text-neutral-500 dark:text-neutral-400">
+                  Upcoming Bills
+                </div>
+                <div className="mt-1 text-sm font-semibold tabular-nums text-neutral-900 dark:text-neutral-100">
+                  {formatCurrency(safeToSpend.upcomingBillsTotal, currency)}
+                </div>
+                <div className="mt-0.5 text-[11px] text-neutral-400 dark:text-neutral-500 tabular-nums">
+                  {safeToSpend.upcomingBillsCount} due
+                </div>
+              </div>
+
+              <div>
+                <div className="text-xs text-neutral-500 dark:text-neutral-400">
+                  Spent Today
+                </div>
+                <div className="mt-1 text-sm font-semibold tabular-nums text-neutral-900 dark:text-neutral-100">
+                  {formatCurrency(safeToSpend.spentToday, currency)}
+                </div>
+                <div className="mt-0.5 text-[11px] text-neutral-400 dark:text-neutral-500 tabular-nums">
+                  {safeToSpend.spentTodayCount} today
+                </div>
+              </div>
+
+              <div>
+                <div className="text-xs text-neutral-500 dark:text-neutral-400">
+                  Tomorrow’s Pace
+                </div>
+                <div
+                  className={`mt-1 text-sm font-semibold tabular-nums ${
+                    safeToSpend.tomorrowsPace < 0
+                      ? 'text-rose-600 dark:text-rose-400'
+                      : safeToSpend.tomorrowsPace > 0
+                      ? 'text-emerald-600 dark:text-emerald-400'
+                      : 'text-neutral-900 dark:text-neutral-100'
+                  }`}
+                >
+                  {formatCurrency(safeToSpend.tomorrowsPace, currency)} / day
+                </div>
+                <div className="mt-0.5 text-[11px] text-neutral-400 dark:text-neutral-500 tabular-nums">
+                  {safeToSpend.isPastMonth &&
+                  safeToSpend.daysRemainingAfterToday === 0
+                    ? 'Month ended'
+                    : `${safeToSpend.daysRemainingAfterToday} ${
+                        safeToSpend.daysRemainingAfterToday === 1
+                          ? 'day'
+                          : 'days'
+                      } left`}
+                </div>
+              </div>
             </div>
           </div>
         </div>
